@@ -38,128 +38,179 @@ const AMBER = [176, 90, 10];
 const DARK = [38, 38, 44];
 const PINK = [214, 150, 150];
 
-function fill(c) { for (let i = 0; i < W * H; i++) { px[i * 3] = c[0]; px[i * 3 + 1] = c[1]; px[i * 3 + 2] = c[2]; } }
+// Paint the whole canvas one colour.
+function fill(c) {
+  for (let i = 0; i < px.length; i += 3) {
+    px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2];
+  }
+}
+// Plot a single pixel; silently ignore anything outside the canvas.
 function set(x, y, c) {
-  if (x < 0 || y < 0 || x >= W || y >= H) return;
-  const i = (y * W + x) * 3; px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2];
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  const o = (y * W + x) * 3;
+  px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2];
 }
 function get(x, y) {
-  if (x < 0 || y < 0 || x >= W || y >= H) return [0, 0, 0];
-  const i = (y * W + x) * 3; return [px[i], px[i + 1], px[i + 2]];
+  if (x < 0 || x >= W || y < 0 || y >= H) return [0, 0, 0];
+  const o = (y * W + x) * 3;
+  return [px[o], px[o + 1], px[o + 2]];
 }
+// Solid rectangle, clipped to the canvas.
 function rect(x, y, w, h, c) {
-  x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
-  for (let yy = Math.max(0, y); yy < Math.min(H, y + h); yy++)
-    for (let xx = Math.max(0, x); xx < Math.min(W, x + w); xx++) set(xx, yy, c);
+  const rx = Math.round(x), ry = Math.round(y);
+  const x0 = Math.max(0, rx), y0 = Math.max(0, ry);
+  const x1 = Math.min(W, rx + Math.round(w)), y1 = Math.min(H, ry + Math.round(h));
+  for (let yy = y0; yy < y1; yy++) {
+    for (let xx = x0; xx < x1; xx++) set(xx, yy, c);
+  }
 }
+// Bresenham line with a square brush of width w.
 function line(x0, y0, x1, y1, c, w = 1) {
-  x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
-  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
-  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
-  let err = dx - dy, x = x0, y = y0;
-  const r = Math.floor(w / 2);
+  let ax = Math.round(x0), ay = Math.round(y0);
+  const bx = Math.round(x1), by = Math.round(y1);
+  const dx = Math.abs(bx - ax), dy = Math.abs(by - ay);
+  const sx = ax < bx ? 1 : -1, sy = ay < by ? 1 : -1;
+  const half = Math.floor(w / 2);
+  let err = dx - dy;
   for (;;) {
-    for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) set(x + a, y + b, c);
-    if (x === x1 && y === y1) break;
+    for (let oy = -half; oy <= half; oy++) {
+      for (let ox = -half; ox <= half; ox++) set(ax + ox, ay + oy, c);
+    }
+    if (ax === bx && ay === by) break;
     const e2 = 2 * err;
-    if (e2 > -dy) { err -= dy; x += sx; }
-    if (e2 < dx) { err += dx; y += sy; }
+    if (e2 > -dy) { err -= dy; ax += sx; }
+    if (e2 < dx) { err += dx; ay += sy; }
   }
 }
+// Disc, filled by default; with fillIt false only its rim is drawn.
 function circle(cx, cy, r, c, fillIt = true) {
-  cx = Math.round(cx); cy = Math.round(cy); r = Math.round(r);
-  for (let y = -r; y <= r; y++) for (let x = -r; x <= r; x++) {
-    const d = x * x + y * y;
-    if (fillIt ? d <= r * r : d <= r * r && d >= (r - 1) * (r - 1)) set(cx + x, cy + y, c);
+  const ccx = Math.round(cx), ccy = Math.round(cy), rr = Math.round(r);
+  const outer = rr * rr, inner = (rr - 1) * (rr - 1);
+  for (let yy = -rr; yy <= rr; yy++) {
+    for (let xx = -rr; xx <= rr; xx++) {
+      const d2 = xx * xx + yy * yy;
+      if (fillIt ? d2 <= outer : (d2 <= outer && d2 >= inner)) set(ccx + xx, ccy + yy, c);
+    }
   }
 }
+// Filled polygon, scanline by scanline.
 function poly(points, c) {
-  let minY = 1e9, maxY = -1e9;
-  for (const p of points) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
-  for (let y = Math.ceil(minY); y <= Math.floor(maxY); y++) {
-    const xs = [];
+  let top = 1e9, bottom = -1e9;
+  for (const p of points) {
+    top = Math.min(top, p[1]);
+    bottom = Math.max(bottom, p[1]);
+  }
+  for (let y = Math.ceil(top); y <= Math.floor(bottom); y++) {
+    const cuts = [];
     for (let i = 0; i < points.length; i++) {
       const a = points[i], b = points[(i + 1) % points.length];
-      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y))
-        xs.push(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) {
+        cuts.push(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+      }
     }
-    xs.sort((m, n) => m - n);
-    for (let k = 0; k + 1 < xs.length; k += 2)
-      for (let x = Math.ceil(xs[k]); x <= Math.floor(xs[k + 1]); x++) set(x, y, c);
+    cuts.sort((m, n) => m - n);
+    for (let k = 0; k + 1 < cuts.length; k += 2) {
+      for (let x = Math.ceil(cuts[k]); x <= Math.floor(cuts[k + 1]); x++) set(x, y, c);
+    }
   }
 }
 function polyLine(points, c, w = 1) {
-  for (let i = 0; i + 1 < points.length; i++) line(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1], c, w);
+  for (let i = 1; i < points.length; i++) {
+    line(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1], c, w);
+  }
 }
+// Blend two RGB colours: t = 0 gives a, t = 1 gives b.
 function lerpC(a, b, t) {
-  return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)];
+  const out = [0, 0, 0];
+  for (let i = 0; i < 3; i++) out[i] = Math.round(a[i] + (b[i] - a[i]) * t);
+  return out;
 }
 function vgrad(x, y, w, h, c1, c2) {
-  for (let yy = 0; yy < h; yy++) rect(x, y + yy, w, 1, lerpC(c1, c2, h <= 1 ? 0 : yy / (h - 1)));
+  for (let yy = 0; yy < h; yy++) {
+    const t = h <= 1 ? 0 : yy / (h - 1);
+    rect(x, y + yy, w, 1, lerpC(c1, c2, t));
+  }
 }
 function hgrad(x, y, w, h, c1, c2) {
-  for (let xx = 0; xx < w; xx++) rect(x + xx, y, 1, h, lerpC(c1, c2, w <= 1 ? 0 : xx / (w - 1)));
+  for (let xx = 0; xx < w; xx++) {
+    const t = w <= 1 ? 0 : xx / (w - 1);
+    rect(x + xx, y, 1, h, lerpC(c1, c2, t));
+  }
 }
 // Deterministic hash noise for paper grain (seeded, no Math.random).
 function hash2(x, y) {
-  let h = (x * 374761393 + y * 668265263) | 0;
-  h = (h ^ (h >> 13)) | 0; h = Math.imul(h, 1274126177);
+  let h = (y * 668265263 + x * 374761393) | 0;
+  h = (h ^ (h >> 13)) | 0;
+  h = Math.imul(h, 1274126177);
   h = (h ^ (h >> 16)) >>> 0;
   return h / 4294967295;
 }
 const GRAIN = 1;
 function grain() {
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const d = Math.round((hash2(x, y) - 0.5) * 2 * GRAIN);
-    if (!d) continue;
-    const i = (y * W + x) * 3;
-    px[i] = Math.max(0, Math.min(255, px[i] + d));
-    px[i + 1] = Math.max(0, Math.min(255, px[i + 1] + d));
-    px[i + 2] = Math.max(0, Math.min(255, px[i + 2] + d));
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const d = Math.round((hash2(x, y) - 0.5) * 2 * GRAIN);
+      if (!d) continue;
+      const i = (y * W + x) * 3;
+      for (let k = 0; k < 3; k++) px[i + k] = Math.max(0, Math.min(255, px[i + k] + d));
+    }
   }
 }
+// Staggered halftone dots over a box.
 function dots(x, y, w, h, c, gap = 6, r = 1) {
-  for (let yy = y + 3; yy < y + h - 2; yy += gap)
-    for (let xx = x + 3 + ((Math.floor((yy - y) / gap) % 2) * gap) / 2; xx < x + w - 2; xx += gap)
-      circle(xx, yy, r, c);
+  for (let yy = y + 3; yy < y + h - 2; yy += gap) {
+    const row = Math.floor((yy - y) / gap) % 2;
+    for (let xx = x + 3 + (row * gap) / 2; xx < x + w - 2; xx += gap) circle(xx, yy, r, c);
+  }
 }
 
 // ---------------------------------------------------------------- PNG writer
+// CRC-32 (IEEE 802.3) lookup table, built once when the program loads.
 const CRC_TABLE = (() => {
-  const t = new Int32Array(256);
+  const table = new Int32Array(256);
   for (let n = 0; n < 256; n++) {
     let c = n;
-    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[n] = c;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) !== 0 ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c;
   }
-  return t;
+  return table;
 })();
 function crc32(buf) {
   let c = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xFF] ^ (c >>> 8);
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
-function chunk(type, data) {
-  const out = Buffer.alloc(12 + data.length);
+// One PNG chunk: 4-byte length, type, data, then the CRC over type + data.
+function pngChunk(type, data) {
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const out = Buffer.alloc(body.length + 8);
   out.writeUInt32BE(data.length, 0);
-  out.write(type, 4, 'ascii');
-  data.copy(out, 8);
-  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+  body.copy(out, 4);
+  out.writeUInt32BE(crc32(body), body.length + 4);
   return out;
 }
 function writePNG(path) {
-  const raw = Buffer.alloc((W * 3 + 1) * H);
+  const stride = W * 3 + 1; // one filter byte per scanline, filter type 0
+  const raw = Buffer.alloc(stride * H);
   for (let y = 0; y < H; y++) {
-    raw[y * (W * 3 + 1)] = 0;
-    raw.set(px.subarray(y * W * 3, (y + 1) * W * 3), y * (W * 3 + 1) + 1);
+    raw[y * stride] = 0;
+    raw.set(px.subarray(y * W * 3, (y + 1) * W * 3), y * stride + 1);
   }
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4);
-  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-  const idat = deflateSync(raw, { level: 9 });
+  ihdr.writeUInt32BE(W, 0);
+  ihdr.writeUInt32BE(H, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type 2 = truecolour RGB
+  ihdr[10] = 0; // compression: deflate
+  ihdr[11] = 0; // filter: adaptive, we use 0
+  ihdr[12] = 0; // interlace: none
   const png = Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-    chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0)),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
   ]);
   writeFileSync(path, png);
   return png.length;
@@ -167,60 +218,63 @@ function writePNG(path) {
 
 // ---------------------------------------------------------------- fonts
 // Single-stroke capitals on a 5x7 grid (x 0..4, y 0..6). Fixed advance 6 units.
+// Stored as compact stroke strings: each glyph is "x0,y0,x1,y1;..." — one
+// segment per group, parsed by drawText. Same letterforms as any 5x7 face,
+// written here as plain coordinate text instead of nested arrays.
 const GLYPHS = {
-  A: [[0, 6, 2, 0], [2, 0, 4, 6], [1, 4, 3, 4]],
-  B: [[0, 0, 0, 6], [0, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 0, 3], [3, 3, 4, 4], [4, 4, 4, 5], [4, 5, 3, 6], [3, 6, 0, 6]],
-  C: [[4, 1, 3, 0], [3, 0, 1, 0], [1, 0, 0, 1], [0, 1, 0, 5], [0, 5, 1, 6], [1, 6, 3, 6], [3, 6, 4, 5]],
-  D: [[0, 0, 0, 6], [0, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 5], [4, 5, 3, 6], [3, 6, 0, 6]],
-  E: [[4, 0, 0, 0], [0, 0, 0, 6], [0, 6, 4, 6], [0, 3, 3, 3]],
-  F: [[0, 0, 0, 6], [0, 0, 4, 0], [0, 3, 3, 3]],
-  G: [[4, 1, 3, 0], [3, 0, 1, 0], [1, 0, 0, 1], [0, 1, 0, 5], [0, 5, 1, 6], [1, 6, 3, 6], [3, 6, 4, 5], [4, 5, 4, 3], [4, 3, 2, 3]],
-  H: [[0, 0, 0, 6], [4, 0, 4, 6], [0, 3, 4, 3]],
-  I: [[1, 0, 3, 0], [2, 0, 2, 6], [1, 6, 3, 6]],
-  J: [[4, 0, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5], [0, 5, 0, 4]],
-  K: [[0, 0, 0, 6], [4, 0, 0, 3], [0, 3, 4, 6]],
-  L: [[0, 0, 0, 6], [0, 6, 4, 6]],
-  M: [[0, 6, 0, 0], [0, 0, 2, 3], [2, 3, 4, 0], [4, 0, 4, 6]],
-  N: [[0, 6, 0, 0], [0, 0, 4, 6], [4, 6, 4, 0]],
-  O: [[1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5], [0, 5, 0, 1], [0, 1, 1, 0]],
-  P: [[0, 6, 0, 0], [0, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 0, 3]],
-  Q: [[1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5], [0, 5, 0, 1], [0, 1, 1, 0], [3, 4, 4, 6]],
-  R: [[0, 6, 0, 0], [0, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 0, 3], [2, 3, 4, 6]],
-  S: [[4, 1, 3, 0], [3, 0, 1, 0], [1, 0, 0, 1], [0, 1, 0, 2], [0, 2, 1, 3], [1, 3, 3, 3], [3, 3, 4, 4], [4, 4, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5]],
-  T: [[0, 0, 4, 0], [2, 0, 2, 6]],
-  U: [[0, 0, 0, 5], [0, 5, 1, 6], [1, 6, 3, 6], [3, 6, 4, 5], [4, 5, 4, 0]],
-  V: [[0, 0, 2, 6], [2, 6, 4, 0]],
-  W: [[0, 0, 1, 6], [1, 6, 2, 3], [2, 3, 3, 6], [3, 6, 4, 0]],
-  X: [[0, 0, 4, 6], [4, 0, 0, 6]],
-  Y: [[0, 0, 2, 3], [4, 0, 2, 3], [2, 3, 2, 6]],
-  Z: [[0, 0, 4, 0], [4, 0, 0, 6], [0, 6, 4, 6]],
-  '0': [[1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5], [0, 5, 0, 1], [0, 1, 1, 0], [1, 5, 3, 1]],
-  '1': [[1, 1, 2, 0], [2, 0, 2, 6], [0, 6, 4, 6]],
-  '2': [[0, 1, 1, 0], [1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 0, 6], [0, 6, 4, 6]],
-  '3': [[0, 0, 4, 0], [4, 0, 4, 6], [0, 3, 3, 3], [0, 6, 4, 6]],
-  '4': [[0, 0, 0, 3], [0, 3, 4, 3], [3, 0, 3, 6]],
-  '5': [[4, 0, 0, 0], [0, 0, 0, 3], [0, 3, 3, 3], [3, 3, 4, 4], [4, 4, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5]],
-  '6': [[4, 1, 3, 0], [3, 0, 1, 0], [1, 0, 0, 2], [0, 2, 0, 5], [0, 5, 1, 6], [1, 6, 3, 6], [3, 6, 4, 5], [4, 5, 4, 3], [4, 3, 3, 2], [3, 2, 1, 2], [1, 2, 0, 3]],
-  '7': [[0, 0, 4, 0], [4, 0, 1, 6]],
-  '8': [[1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 1, 3], [1, 3, 0, 2], [0, 2, 0, 1], [0, 1, 1, 0], [1, 3, 0, 4], [0, 4, 0, 5], [0, 5, 1, 6], [1, 6, 3, 6], [3, 6, 4, 5], [4, 5, 4, 4], [4, 4, 3, 3]],
-  '9': [[1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 3], [4, 3, 3, 4], [3, 4, 1, 4], [1, 4, 0, 3], [0, 3, 0, 1], [0, 1, 1, 0], [4, 1, 4, 6]],
-  '.': [[2, 5, 2, 5]],
-  ',': [[2, 5, 2, 5], [1, 6, 2, 5]],
-  ':': [[2, 1, 2, 1], [2, 4, 2, 4]],
-  ';': [[2, 1, 2, 1], [2, 4, 2, 4], [1, 6, 2, 4]],
-  "'": [[2, 0, 1, 2]],
-  '-': [[0, 3, 4, 3]],
-  '/': [[4, 6, 0, 0]],
-  '(': [[3, 0, 2, 0], [2, 0, 1, 1], [1, 1, 1, 5], [1, 5, 2, 6], [2, 6, 3, 6]],
-  ')': [[1, 0, 2, 0], [2, 0, 3, 1], [3, 1, 3, 5], [3, 5, 2, 6], [2, 6, 1, 6]],
-  '%': [[4, 0, 0, 6], [0, 0, 1, 0], [1, 0, 1, 1], [1, 1, 0, 1], [0, 1, 0, 0], [3, 5, 4, 5], [4, 5, 4, 6], [4, 6, 3, 6], [3, 6, 3, 5]],
-  '+': [[2, 1, 2, 5], [0, 3, 4, 3]],
-  '=': [[0, 2, 4, 2], [0, 4, 4, 4]],
-  '?': [[1, 1, 1, 0], [1, 0, 3, 0], [3, 0, 4, 1], [4, 1, 4, 2], [4, 2, 3, 3], [3, 3, 2, 3], [2, 4, 2, 4], [2, 6, 2, 6]],
-  '!': [[2, 0, 2, 4], [2, 6, 2, 6]],
-  '$': [[3, 1, 2, 0], [2, 0, 1, 0], [1, 0, 0, 1], [0, 1, 0, 2], [0, 2, 1, 3], [1, 3, 3, 3], [3, 3, 4, 4], [4, 4, 4, 5], [4, 5, 3, 6], [3, 6, 1, 6], [1, 6, 0, 5], [2, 0, 2, 6]],
-  '·': [[2, 3, 2, 3]],
-  ' ': [],
+  A: '0,6,2,0;2,0,4,6;1,4,3,4',
+  B: '0,0,0,6;0,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,0,3;3,3,4,4;4,4,4,5;4,5,3,6;3,6,0,6',
+  C: '4,1,3,0;3,0,1,0;1,0,0,1;0,1,0,5;0,5,1,6;1,6,3,6;3,6,4,5',
+  D: '0,0,0,6;0,0,3,0;3,0,4,1;4,1,4,5;4,5,3,6;3,6,0,6',
+  E: '4,0,0,0;0,0,0,6;0,6,4,6;0,3,3,3',
+  F: '0,0,0,6;0,0,4,0;0,3,3,3',
+  G: '4,1,3,0;3,0,1,0;1,0,0,1;0,1,0,5;0,5,1,6;1,6,3,6;3,6,4,5;4,5,4,3;4,3,2,3',
+  H: '0,0,0,6;4,0,4,6;0,3,4,3',
+  I: '1,0,3,0;2,0,2,6;1,6,3,6',
+  J: '4,0,4,5;4,5,3,6;3,6,1,6;1,6,0,5;0,5,0,4',
+  K: '0,0,0,6;4,0,0,3;0,3,4,6',
+  L: '0,0,0,6;0,6,4,6',
+  M: '0,6,0,0;0,0,2,3;2,3,4,0;4,0,4,6',
+  N: '0,6,0,0;0,0,4,6;4,6,4,0',
+  O: '1,0,3,0;3,0,4,1;4,1,4,5;4,5,3,6;3,6,1,6;1,6,0,5;0,5,0,1;0,1,1,0',
+  P: '0,6,0,0;0,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,0,3',
+  Q: '1,0,3,0;3,0,4,1;4,1,4,5;4,5,3,6;3,6,1,6;1,6,0,5;0,5,0,1;0,1,1,0;3,4,4,6',
+  R: '0,6,0,0;0,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,0,3;2,3,4,6',
+  S: '4,1,3,0;3,0,1,0;1,0,0,1;0,1,0,2;0,2,1,3;1,3,3,3;3,3,4,4;4,4,4,5;4,5,3,6;3,6,1,6;1,6,0,5',
+  T: '0,0,4,0;2,0,2,6',
+  U: '0,0,0,5;0,5,1,6;1,6,3,6;3,6,4,5;4,5,4,0',
+  V: '0,0,2,6;2,6,4,0',
+  W: '0,0,1,6;1,6,2,3;2,3,3,6;3,6,4,0',
+  X: '0,0,4,6;4,0,0,6',
+  Y: '0,0,2,3;4,0,2,3;2,3,2,6',
+  Z: '0,0,4,0;4,0,0,6;0,6,4,6',
+  '0': '1,0,3,0;3,0,4,1;4,1,4,5;4,5,3,6;3,6,1,6;1,6,0,5;0,5,0,1;0,1,1,0;1,5,3,1',
+  '1': '1,1,2,0;2,0,2,6;0,6,4,6',
+  '2': '0,1,1,0;1,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,0,6;0,6,4,6',
+  '3': '0,0,4,0;4,0,4,6;0,3,3,3;0,6,4,6',
+  '4': '0,0,0,3;0,3,4,3;3,0,3,6',
+  '5': '4,0,0,0;0,0,0,3;0,3,3,3;3,3,4,4;4,4,4,5;4,5,3,6;3,6,1,6;1,6,0,5',
+  '6': '4,1,3,0;3,0,1,0;1,0,0,2;0,2,0,5;0,5,1,6;1,6,3,6;3,6,4,5;4,5,4,3;4,3,3,2;3,2,1,2;1,2,0,3',
+  '7': '0,0,4,0;4,0,1,6',
+  '8': '1,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,1,3;1,3,0,2;0,2,0,1;0,1,1,0;1,3,0,4;0,4,0,5;0,5,1,6;1,6,3,6;3,6,4,5;4,5,4,4;4,4,3,3',
+  '9': '1,0,3,0;3,0,4,1;4,1,4,3;4,3,3,4;3,4,1,4;1,4,0,3;0,3,0,1;0,1,1,0;4,1,4,6',
+  '.': '2,5,2,5',
+  ',': '2,5,2,5;1,6,2,5',
+  ':': '2,1,2,1;2,4,2,4',
+  ';': '2,1,2,1;2,4,2,4;1,6,2,4',
+  "'": '2,0,1,2',
+  '-': '0,3,4,3',
+  '/': '4,6,0,0',
+  '(': '3,0,2,0;2,0,1,1;1,1,1,5;1,5,2,6;2,6,3,6',
+  ')': '1,0,2,0;2,0,3,1;3,1,3,5;3,5,2,6;2,6,1,6',
+  '%': '4,0,0,6;0,0,1,0;1,0,1,1;1,1,0,1;0,1,0,0;3,5,4,5;4,5,4,6;4,6,3,6;3,6,3,5',
+  '+': '2,1,2,5;0,3,4,3',
+  '=': '0,2,4,2;0,4,4,4',
+  '?': '1,1,1,0;1,0,3,0;3,0,4,1;4,1,4,2;4,2,3,3;3,3,2,3;2,4,2,4;2,6,2,6',
+  '!': '2,0,2,4;2,6,2,6',
+  '$': '3,1,2,0;2,0,1,0;1,0,0,1;0,1,0,2;0,2,1,3;1,3,3,3;3,3,4,4;4,4,4,5;4,5,3,6;3,6,1,6;1,6,0,5;2,0,2,6',
+  '·': '2,3,2,3',
+  ' ': '',
 };
 
 function textWidth(s, sc) { return s.length * 6 * sc; }
@@ -229,9 +283,12 @@ function drawText(x, y, s, sc, c, strokeW) {
   const w = strokeW ?? Math.max(1, Math.round(sc * 0.7));
   let cx = x;
   for (const ch of s) {
-    const g = GLYPHS[ch] ?? GLYPHS['?'];
-    for (const seg of g) {
-      line(cx + seg[0] * sc, y + seg[1] * sc, cx + seg[2] * sc, y + seg[3] * sc, c, w);
+    const strokes = GLYPHS[ch] ?? GLYPHS['?'];
+    if (strokes) {
+      for (const seg of strokes.split(';')) {
+        const p = seg.split(',').map(Number);
+        line(cx + p[0] * sc, y + p[1] * sc, cx + p[2] * sc, y + p[3] * sc, c, w);
+      }
     }
     cx += 6 * sc;
   }
